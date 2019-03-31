@@ -1,0 +1,36 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel TransformAndFilter
+
+bool enableBoxFilter;
+float4 minPoint;
+float4 maxPoint;
+float4x4 transformMat;
+
+groupshared int currentIndex = 0; 
+
+uint HDDownScaleFactor;
+uint LDDownScaleFactor;
+
+StructuredBuffer<float3> pointsBuffer;
+AppendStructuredBuffer<float3> HDFilteredBuffer;
+AppendStructuredBuffer<float3> LDFilteredBuffer;
+
+[numthreads(64,1,1)]
+void TransformAndFilter(uint id : SV_DispatchThreadID)
+{
+	float4 worldPoint = mul(transformMat, float4(pointsBuffer[id].xyz, 1.0f));
+
+	bool isInHD = (HDDownScaleFactor <= 1 || id % HDDownScaleFactor == 0);
+	bool isInLD = (LDDownScaleFactor <= 1 || id % LDDownScaleFactor == 0);
+	if (worldPoint.x == 0 && worldPoint.y == 0 && worldPoint.z == 0) return; 
+		
+	if (!enableBoxFilter ||
+			(worldPoint.x > minPoint.x && worldPoint.y > minPoint.y && worldPoint.z > minPoint.z
+				&& worldPoint.x < maxPoint.x && worldPoint.y < maxPoint.y && worldPoint.z < maxPoint.z))
+	{
+
+		if (isInHD) HDFilteredBuffer.Append(worldPoint);
+		if (isInLD) LDFilteredBuffer.Append(worldPoint);
+	}
+	
+}
