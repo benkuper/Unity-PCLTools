@@ -8,7 +8,7 @@ public class ClusterManagerDemo : MonoBehaviour
     public ClusterManager clusterManager;
 
     public GameObject clusterPrefab;
-    Dictionary<int, GameObject> clusterIdMap;
+    Dictionary<int, ClusterViz> clusterIdMap;
 
     void Start()
     {
@@ -17,7 +17,7 @@ public class ClusterManagerDemo : MonoBehaviour
         clusterManager.clusterGhosted += clusterGhosted;
         clusterManager.clusterRemoved += clusterRemoved;
 
-        clusterIdMap = new Dictionary<int, GameObject>();
+        clusterIdMap = new Dictionary<int, ClusterViz>();
     }
 
     void clusterAdded(Cluster cluster)
@@ -28,13 +28,11 @@ public class ClusterManagerDemo : MonoBehaviour
             return;
         }
 
-        GameObject go = Instantiate(clusterPrefab);
-        go.transform.SetParent(transform);
-        go.transform.position = cluster.center;
-        go.GetComponent<TextMesh>().text = cluster.id.ToString();
-        go.GetComponent<TextMesh>().color = cluster.color;
+        ClusterViz c = Instantiate(clusterPrefab).GetComponent<ClusterViz>();
+        c.transform.SetParent(transform);
 
-        clusterIdMap.Add(cluster.id, go);
+        c.updateData(cluster, true);
+        clusterIdMap.Add(cluster.id, c);
     }
 
     void clusterUpdated(Cluster cluster)
@@ -45,13 +43,12 @@ public class ClusterManagerDemo : MonoBehaviour
             return;
         }
 
-        clusterIdMap[cluster.id].transform.position = cluster.center;
-        clusterIdMap[cluster.id].GetComponent<TextMesh>().color = cluster.color;
+        clusterIdMap[cluster.id].updateData(cluster, false);
     }
 
     void clusterGhosted(Cluster cluster)
     {
-        clusterIdMap[cluster.id].GetComponent<TextMesh>().color = cluster.color;
+        clusterIdMap[cluster.id].updateData(cluster, false);
     }
 
     void clusterRemoved(Cluster cluster)
@@ -62,7 +59,7 @@ public class ClusterManagerDemo : MonoBehaviour
             return;
         }
 
-        Destroy(clusterIdMap[cluster.id]);
+        Destroy(clusterIdMap[cluster.id].gameObject);
         clusterIdMap.Remove(cluster.id);
     }
 

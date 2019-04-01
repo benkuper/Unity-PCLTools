@@ -11,62 +11,66 @@ namespace BK.PCL
         KinectManager kinect;
 
         public ComputeShader pclCompute;
-        int kernelHandle;
+        int filterKernelHandle;
 
         int totalPoints;
         int threadGroupCount;
 
         int[] metaData;
-        public int numHDFilteredPoints;
-        public int numLDFilteredPoints;
+        public int numFilteredPoints;
 
-        Vector3[] HDFilteredPoints;
-        Vector3[] LDFilteredPoints;
+        Vector3[] filteredPoints;
+        Vector3[] borderPoints;
 
         ComputeBuffer pointsBuffer;
-        ComputeBuffer HDFilteredBuffer;
-        ComputeBuffer LDFilteredBuffer;
+        ComputeBuffer filteredBuffer;
+        ComputeBuffer excludeBuffer;
+        ComputeBuffer borderBuffer;
 
-        ComputeBuffer HDCountBuffer;
-        int[] HDCounter;
-        ComputeBuffer LDCountBuffer;
-        int[] LDCounter;
+        ComputeBuffer countBuffer;
+        int[] counter;
 
         [Header("Box Filter")]
         public bool enableBoxFilter = true;
-        public Vector3 boxCenter = Vector3.zero;
-        public Vector3 boxSize = Vector3.one;
+        public Bounds mainBounds;
+        public List<Bounds> excludeBounds;
+        //excludeArray;
 
         [Header("DownScaling")]
         [Range(1, 100)]
-        public int HDDownScaleFactor = 3;
+        public int downScaleFactor = 50;
         [Range(1, 100)]
-        public int LDDownScaleFactor = 50;
+        public int HDDownScaleFactor = 3;
 
         [Header("KDTree")]
         public bool enableKDTree;
-        KDTree HDTree;
-        KDTree LDTree;
+        KDTree tree;
         KDQuery query;
-
 
         [Header("Cluster")]
         public bool enableCluster;
+
         bool clusterLock;
         public int numClusters;
-        [Range(0,  2)]
+        [Range(0, 2)]
         public float clusterMaxDist = .03f;
-        [Range(.01f,.2f)]
+        [Range(.01f, .2f)]
         public float minClusterSize = .3f;
         [Range(1, 100)]
         public int minNeighboursThreshold = 10;
 
-
-        [Header("Tracking")]
         public float maxCorrespondanceDist = 1;
         public float clusterGhostTime = .3f;
 
-        
+        [Header("Orientation")]
+        public bool enableOrientation;
+        public float borderRadius = .1f;
+        public float aimRadius = .1f;
+        public float hdCenterRadius = .2f;
+
+        public Vector3 orientationTarget;
+        public float orientationExcludeRadius;
+
         public List<Cluster> clusters { get; private set; }
         Dictionary<int, Cluster> clusterIdMap;
 
@@ -76,8 +80,7 @@ namespace BK.PCL
         public event ClusterEvent clusterGhosted;
         public event ClusterEvent clusterRemoved;
 
-
-        public enum DrawDebug { None, Raw, Clusters, All };
+        public enum DrawDebug { None, Raw, Clusters, Orientations, All };
 
         [Header("Debug")]
         public DrawDebug drawDebug;
@@ -91,32 +94,32 @@ namespace BK.PCL
 
             metaData = new int[1];
 
-            HDFilteredPoints = new Vector3[totalPoints];
-            LDFilteredPoints = new Vector3[totalPoints];
+            filteredPoints = new Vector3[totalPoints];
+            borderPoints = new Vector3[5000]; //not more than 5000 points on cluster border !
 
             Debug.Log("Kinect is here with : " + totalPoints + " point");
-            kernelHandle = pclCompute.FindKernel("TransformAndFilter");
+            filterKernelHandle = pclCompute.FindKernel("TransformAndFilter");
 
             pointsBuffer = new ComputeBuffer(totalPoints, 12);
-            pclCompute.SetBuffer(kernelHandle, "pointsBuffer", pointsBuffer);
+            pclCompute.SetBuffer(filterKernelHandle, "pointsBuffer", pointsBuffer);
 
-            HDFilteredBuffer = new ComputeBuffer(totalPoints, 12, ComputeBufferType.Append);
-            LDFilteredBuffer = new ComputeBuffer(totalPoints, 12, ComputeBufferType.Append);
 
-            pclCompute.SetBuffer(kernelHandle, "HDFilteredBuffer", HDFilteredBuffer);
-            pclCompute.SetBuffer(kernelHandle, "LDFilteredBuffer", LDFilteredBuffer);
+            filteredBuffer = new ComputeBuffer(totalPoints, 12, ComputeBufferType.Append);
 
-            HDCountBuffer = new ComputeBuffer(1, sizeof(int), ComputeBufferType.IndirectArguments);
-            HDCounter = new int[1] { 0 };
+            pclCompute.SetBuffer(filterKernelHandle, "filteredBuffer", filteredBuffer);
 
-            LDCountBuffer = new ComputeBuffer(1, sizeof(int), ComputeBufferType.IndirectArguments);
-            LDCounter = new int[1] { 0 };
+            countBuffer = new ComputeBuffer(1, sizeof(int), ComputeBufferType.IndirectArguments);
+            counter = new int[1] { 0 };
 
-            HDTree = new KDTree(HDFilteredPoints, 0, 16);
-            LDTree = new KDTree(LDFilteredPoints, 0, 16);
+            excludeBuffer = new ComputeBuffer(excludeBounds.Count, 24);
+            pclCompute.SetBuffer(filterKernelHandle, "excludeBuffer", excludeBuffer);
 
-            numHDFilteredPoints = 0;
-            numLDFilteredPoints = 0;
+            borderBuffer = new ComputeBuffer(borderPoints.Length, 12, ComputeBufferType.Append);
+            pclCompute.SetBuffer(filterKernelHandle, "borderBuffer", borderBuffer);
+
+            tree = new KDTree(filteredPoints, 0, 16);
+
+            numFilteredPoints = 0;
 
             query = new KDQuery();
 
@@ -135,41 +138,40 @@ namespace BK.PCL
         void processPCLCompute()
         {
             pclCompute.SetBool("enableBoxFilter", enableBoxFilter);
-            pclCompute.SetVector("minPoint", boxCenter - boxSize / 2);
-            pclCompute.SetVector("maxPoint", boxCenter + boxSize / 2);
-            pclCompute.SetInt("HDDownScaleFactor", HDDownScaleFactor);
-            pclCompute.SetInt("LDDownScaleFactor", LDDownScaleFactor);
+            pclCompute.SetVector("minPoint", mainBounds.min);
+            pclCompute.SetVector("maxPoint", mainBounds.max);
+            pclCompute.SetInt("downScaleFactor", downScaleFactor);
             pclCompute.SetInt("currentIndex", 0);
+
+            if (excludeBuffer.count != excludeBounds.Count)
+            {
+                excludeBuffer.Release();
+                excludeBuffer = new ComputeBuffer(excludeBounds.Count, 24);
+                pclCompute.SetBuffer(filterKernelHandle, "excludeBuffer", excludeBuffer);
+            }
+
+            excludeBuffer.SetData(excludeBounds);
 
             pclCompute.SetMatrix("transformMat", transform.localToWorldMatrix);
 
-            HDFilteredBuffer.SetCounterValue(0);
-            LDFilteredBuffer.SetCounterValue(0);
-
+            filteredBuffer.SetCounterValue(0);
             pointsBuffer.SetData(kinect.realWorldMap);
 
-            pclCompute.Dispatch(kernelHandle,threadGroupCount, 1, 1);
+            pclCompute.Dispatch(filterKernelHandle, threadGroupCount, 1, 1);
 
-            
-            ComputeBuffer.CopyCount(HDFilteredBuffer, HDCountBuffer, 0);
-            HDCountBuffer.GetData(HDCounter);
-            numHDFilteredPoints = HDCounter[0];
-            HDFilteredBuffer.GetData(HDFilteredPoints);
-
-            ComputeBuffer.CopyCount(LDFilteredBuffer, LDCountBuffer, 0);
-            LDCountBuffer.GetData(LDCounter);
-            numLDFilteredPoints = LDCounter[0];
-            LDFilteredBuffer.GetData(LDFilteredPoints);
-            
+            ComputeBuffer.CopyCount(filteredBuffer, countBuffer, 0);
+            countBuffer.GetData(counter);
+            numFilteredPoints = counter[0];
+            filteredBuffer.GetData(filteredPoints);
 
             if (drawDebug == DrawDebug.Raw || drawDebug == DrawDebug.All)
             {
                 Color c = new Color(1, 1, 1, .3f);
-                for (int i = 0; i < numHDFilteredPoints; i++)
+                for (int i = 0; i < numFilteredPoints; i++)
                 {
-                    Vector3 p = HDFilteredPoints[i];
-                    Debug.DrawLine(p, p + Vector3.up * .01f, c);
-                    Debug.DrawLine(p, p + Vector3.right * .01f, c);
+                    Vector3 p = filteredPoints[i];
+                    Debug.DrawLine(p, p + Vector3.up * .005f, c);
+                    Debug.DrawLine(p, p + Vector3.right * .005f, c);
                 }
             }
         }
@@ -177,24 +179,23 @@ namespace BK.PCL
         void processKDTree()
         {
             if (!enableKDTree || !enableBoxFilter) return;
-            if(numHDFilteredPoints > 0) HDTree.Rebuild(numHDFilteredPoints, 16);
-            if(numLDFilteredPoints > 0) LDTree.Rebuild(numLDFilteredPoints, 16);
+            if (numFilteredPoints > 0) tree.Rebuild(numFilteredPoints, 16);
         }
-        
+
 
         void processClusters()
         {
             if (!enableKDTree || !enableBoxFilter || !enableCluster) return;
 
-            bool[] processedIndices = new bool[numLDFilteredPoints];
-            bool[] noiseIndices = new bool[numLDFilteredPoints];
-            bool[] assignedToCluster = new bool[numLDFilteredPoints];
+            bool[] processedIndices = new bool[numFilteredPoints];
+            bool[] noiseIndices = new bool[numFilteredPoints];
+            bool[] assignedToCluster = new bool[numFilteredPoints];
 
             int noiseCount = 0;
 
             List<Cluster> newClusters = new List<Cluster>();
 
-            for(int i = 0;i< numLDFilteredPoints; i++)
+            for (int i = 0; i < numFilteredPoints; i++)
             {
                 //If we already processed this star, skip it
                 if (processedIndices[i])
@@ -205,7 +206,7 @@ namespace BK.PCL
                 //Todo: will the visited.false stuff be carried over?
                 List<int> neighbourIndices = new List<int>();
 
-               query.Radius(LDTree, LDFilteredPoints[i], clusterMaxDist, neighbourIndices);
+                query.Radius(tree, filteredPoints[i], clusterMaxDist, neighbourIndices);
 
                 //If not enough neighbours, label as noise and continue.
                 if (neighbourIndices.Count < minNeighboursThreshold)
@@ -219,13 +220,12 @@ namespace BK.PCL
                     //Else, start new cluster.
                     List<int> newClusterIndices = new List<int>();
 
-                    Vector3 clusterCenter = LDFilteredPoints[i];
-                    Vector3 boundsMin = LDFilteredPoints[i];
-                    Vector3 boundsMax = LDFilteredPoints[i];
+                    Vector3 clusterCenter = filteredPoints[i];
+                    Vector3 boundsMin = filteredPoints[i];
+                    Vector3 boundsMax = filteredPoints[i];
 
                     assignedToCluster[i] = true;
                     newClusterIndices.Add(i);
-                    
 
                     //Expanding the new cluster
                     var seedSet = neighbourIndices;
@@ -244,8 +244,8 @@ namespace BK.PCL
 
                             //if(use2DTree) query2D.Radius(tree2D, filteredXZPoints[currentSeedIndice], clusterMaxDist, propagationNeighbourIndices);
                             //else
-                            query.Radius(LDTree, LDFilteredPoints[currentSeedIndice], clusterMaxDist, propagationNeighbourIndices);
-                            
+                            query.Radius(tree, filteredPoints[currentSeedIndice], clusterMaxDist, propagationNeighbourIndices);
+
                             if (propagationNeighbourIndices.Count >= minNeighboursThreshold)
                                 seedSet.AddRange(propagationNeighbourIndices);
 
@@ -254,9 +254,9 @@ namespace BK.PCL
                                 assignedToCluster[currentSeedIndice] = true;
                                 newClusterIndices.Add(currentSeedIndice);
 
-                                clusterCenter += LDFilteredPoints[currentSeedIndice];
-                                boundsMin = Vector3.Min(boundsMin, LDFilteredPoints[currentSeedIndice]);
-                                boundsMax = Vector3.Max(boundsMax, LDFilteredPoints[currentSeedIndice]);
+                                clusterCenter += filteredPoints[currentSeedIndice];
+                                boundsMin = Vector3.Min(boundsMin, filteredPoints[currentSeedIndice]);
+                                boundsMax = Vector3.Max(boundsMax, filteredPoints[currentSeedIndice]);
                             }
                         }
 
@@ -265,7 +265,7 @@ namespace BK.PCL
                     }
 
 
-                    clusterCenter /= newClusterIndices.Count;
+                    if(newClusterIndices.Count > 0) clusterCenter /= newClusterIndices.Count;
                     Bounds clusterBounds = new Bounds();
                     clusterBounds.SetMinMax(boundsMin, boundsMax);
 
@@ -277,22 +277,29 @@ namespace BK.PCL
                 }
             }
 
-            processClusterCorrespondance(newClusters);
-            numClusters = clusters.Count;
 
             if (drawDebug == DrawDebug.Clusters || drawDebug == DrawDebug.All)
             {
-                foreach(Cluster c in clusters)
+                foreach (Cluster c in clusters)
                 {
                     foreach (int index in c.indices)
                     {
-                        Debug.DrawLine(LDFilteredPoints[index], LDFilteredPoints[index] + Vector3.up * .01f, c.color);
-                        Debug.DrawLine(LDFilteredPoints[index], LDFilteredPoints[index] + Vector3.right * .01f, c.color);
+                        Debug.DrawLine(filteredPoints[index], filteredPoints[index] + Vector3.up * .007f, c.color);
+                        Debug.DrawLine(filteredPoints[index], filteredPoints[index] + Vector3.right * .007f, c.color);
                     }
                 }
             }
+
+
+
+            if (enableOrientation) processClusterOrientations(newClusters);
+            processClusterCorrespondance(newClusters);
+
+            numClusters = clusters.Count;
+
+            
         }
-        
+
 
         void processClusterCorrespondance(List<Cluster> newClusters)
         {
@@ -301,21 +308,19 @@ namespace BK.PCL
             List<Cluster> clustersToRemove = new List<Cluster>(); //we will put here all clusters that are replaced by new ones, and ghost clusters that are too old
             List<Cluster> clustersToGhost = new List<Cluster>();
             Dictionary<Cluster, Cluster> clustersUpdateMap = new Dictionary<Cluster, Cluster>();
-            
-            foreach(Cluster c in clusters)
+
+            foreach (Cluster c in clusters)
             {
                 float minDist = maxCorrespondanceDist;
                 Cluster closestNewCluster = null;
 
-                foreach(Cluster nc in newClusters)
+                foreach (Cluster nc in newClusters)
                 {
                     if (nc.id != -1) continue; //already assigned
 
                     float dist = Vector3.Distance(c.center, nc.center);
-                    if(dist < minDist)
+                    if (dist < minDist)
                     {
-                       
-
                         minDist = dist;
                         closestNewCluster = nc;
                     }
@@ -333,7 +338,7 @@ namespace BK.PCL
                     //Debug.Log("Cluster " + c.id + " no correspondance " + c.isGhost() + " > " + c.timeAtGhosted);
                     if (!c.isGhost())
                     {
-                        Debug.Log("Ghost cluster " + c.id);
+                        //Debug.Log("Ghost cluster " + c.id);
                         c.timeAtGhosted = Time.time; //start ghosting here
                         c.color = Color.grey;
                         clusterGhosted?.Invoke(c);
@@ -345,7 +350,7 @@ namespace BK.PCL
                         clustersToRemove.Add(c); //dead cluster
                         clusterIdMap.Remove(c.id);
 
-                        Debug.Log("Cluster removed " + c.id);
+                        // Debug.Log("Cluster removed " + c.id);
                     }
                 }
             }
@@ -375,28 +380,111 @@ namespace BK.PCL
         }
 
 
-        //Helpers 
-        public Cluster getClusterWithID(int id)
+        void processClusterOrientations(List<Cluster> newClusters)
         {
-            return clusterIdMap.ContainsKey(id) ? clusterIdMap[id] : null;
+            Bounds innerBounds = new Bounds(mainBounds.center, mainBounds.size - new Vector3(1,0,1) * borderRadius); //avoid removing y
+
+            //Replace filteredPoints with HD result from computeShader
+            pclCompute.SetInt("downScaleFactor", HDDownScaleFactor);
+            pclCompute.SetFloat("borderRadius", borderRadius);
+
+            foreach(Cluster c in newClusters)
+            {
+                pclCompute.SetVector("minPoint", c.bounds.min);
+                pclCompute.SetVector("maxPoint", c.bounds.max);
+                pclCompute.SetVector("mainMinPoint",  mainBounds.min);
+                pclCompute.SetVector("mainMaxPoint", mainBounds.max);
+                    
+                pclCompute.SetInt("currentIndex", 0);
+
+                filteredBuffer.SetCounterValue(0);
+                borderBuffer.SetCounterValue(0);
+                countBuffer.SetCounterValue(0);
+
+                pclCompute.Dispatch(filterKernelHandle, threadGroupCount, 1, 1);
+
+                ComputeBuffer.CopyCount(filteredBuffer, countBuffer, 0);
+                countBuffer.GetData(counter);
+                int numClusterPoints = counter[0];
+                filteredBuffer.GetData(filteredPoints);
+
+                ComputeBuffer.CopyCount(borderBuffer, countBuffer, 0);
+                countBuffer.GetData(counter);
+                int numBorderPoints = Mathf.Min(counter[0], borderPoints.Length);
+                borderBuffer.GetData(borderPoints);
+
+                Vector3 clusterP1 = new Vector3();
+                for (int i = 0; i < numBorderPoints; i++)
+                {
+                    clusterP1 += borderPoints[i];
+                    if (drawDebug == DrawDebug.Orientations || drawDebug == DrawDebug.All) Debug.DrawLine(borderPoints[i] + Vector3.left * .0001f, borderPoints[i] + Vector3.left * .005f, Color.red);
+                }
+
+                if (numBorderPoints > 0) clusterP1 /= numBorderPoints;
+                Vector3 p2Aim = clusterP1 + (c.center - clusterP1) * 2.2f;
+
+                Vector3 clusterP2 = new Vector3();
+                int numInP2Radius = 0;
+
+                Vector3 hdCenter = new Vector3();
+                int numInCenterRadius = 0;
+                for (int i = 0; i < numClusterPoints; i++)
+                {
+                    if (Vector3.Distance(c.center, filteredPoints[i]) < hdCenterRadius)
+                    {
+                        hdCenter += filteredPoints[i];
+                        numInCenterRadius++;
+                    }
+
+                    if(Vector3.Distance(p2Aim, filteredPoints[i]) < aimRadius)
+                    {
+                        clusterP2 += filteredPoints[i];
+                        numInP2Radius++;
+
+                        if (drawDebug == DrawDebug.Orientations || drawDebug == DrawDebug.All) Debug.DrawLine(filteredPoints[i] + Vector3.right * .0001f, filteredPoints[i] + Vector3.right * .005f, Color.blue);
+                    }
+                }
+
+                if (numInCenterRadius > 0) hdCenter /= numInCenterRadius;
+                else hdCenter = c.center;
+
+                if (numInP2Radius > 0) clusterP2 /= numInP2Radius;
+                else clusterP2 = p2Aim;
+
+                c.center = hdCenter;
+
+                c.ray = new Ray(c.center, (clusterP2 - c.center).normalized);
+
+                if (drawDebug == DrawDebug.Orientations || drawDebug == DrawDebug.All)
+                {
+                    for (int i = 0; i < numClusterPoints; i++)  Debug.DrawLine(filteredPoints[i], filteredPoints[i] + Vector3.down * .001f, c.color);
+                    Debug.DrawRay(c.ray.origin, c.ray.direction,Color.grey);
+
+                }
+            }
         }
 
 
         private void OnApplicationQuit()
         {
-            HDFilteredBuffer.Release();
-            LDFilteredBuffer.Release();
+            filteredBuffer.Release();
             pointsBuffer.Release();
-            HDCountBuffer.Release();
-            LDCountBuffer.Release();
+            excludeBuffer.Release();
+            countBuffer.Release();
         }
 
         void OnDrawGizmosSelected()
         {
             Gizmos.color = Color.yellow;
-            Gizmos.DrawWireCube(boxCenter, boxSize);
+            Gizmos.DrawWireCube(mainBounds.center, mainBounds.size);
 
-            if(Application.isPlaying)
+            Gizmos.color = Color.red;
+            for (int i = 0; i < excludeBounds.Count; i++)
+            {
+                Gizmos.DrawWireCube(excludeBounds[i].center, excludeBounds[i].size);
+            }
+
+            if (Application.isPlaying)
             {
                 if (drawDebug == DrawDebug.Clusters || drawDebug == DrawDebug.All)
                 {
@@ -409,7 +497,10 @@ namespace BK.PCL
                 }
             }
 
+
+            Gizmos.color = new Color(1, 0, 1);
+            Gizmos.DrawWireCube(orientationTarget, Vector3.one * .05f);
         }
     }
-   
+
 }

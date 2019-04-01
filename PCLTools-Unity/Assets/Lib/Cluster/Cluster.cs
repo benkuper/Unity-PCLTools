@@ -10,7 +10,7 @@ namespace BK.PCL
         public int id;
         public int numPoints;
         public Vector3 center;
-        public Vector3 orientation;
+        public Ray ray;
         public Bounds bounds;
         public Color color;
 

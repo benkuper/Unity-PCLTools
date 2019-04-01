@@ -8,29 +8,63 @@ float4x4 transformMat;
 
 groupshared int currentIndex = 0; 
 
-uint HDDownScaleFactor;
-uint LDDownScaleFactor;
+uint downScaleFactor;
 
 StructuredBuffer<float3> pointsBuffer;
-AppendStructuredBuffer<float3> HDFilteredBuffer;
-AppendStructuredBuffer<float3> LDFilteredBuffer;
+AppendStructuredBuffer<float3> filteredBuffer;
+
+struct Bounds
+{
+	float3 center;
+	float3 extents;
+};
+
+StructuredBuffer<Bounds> excludeBuffer;
+
+float4 mainMinPoint;
+float4 mainMaxPoint;
+float borderRadius;
+//StructuredBuffer<float3> clusterBuffer;
+AppendStructuredBuffer<float3> borderBuffer;
 
 [numthreads(64,1,1)]
 void TransformAndFilter(uint id : SV_DispatchThreadID)
 {
-	float4 worldPoint = mul(transformMat, float4(pointsBuffer[id].xyz, 1.0f));
+	float3 worldPoint = (float3)mul(transformMat, float4(pointsBuffer[id].xyz, 1.0f));
 
-	bool isInHD = (HDDownScaleFactor <= 1 || id % HDDownScaleFactor == 0);
-	bool isInLD = (LDDownScaleFactor <= 1 || id % LDDownScaleFactor == 0);
 	if (worldPoint.x == 0 && worldPoint.y == 0 && worldPoint.z == 0) return; 
-		
-	if (!enableBoxFilter ||
-			(worldPoint.x > minPoint.x && worldPoint.y > minPoint.y && worldPoint.z > minPoint.z
-				&& worldPoint.x < maxPoint.x && worldPoint.y < maxPoint.y && worldPoint.z < maxPoint.z))
-	{
 
-		if (isInHD) HDFilteredBuffer.Append(worldPoint);
-		if (isInLD) LDFilteredBuffer.Append(worldPoint);
-	}
+	worldPoint.x = -worldPoint.x; //invert X for kinect
 	
+	if (downScaleFactor <= 1 || id % downScaleFactor == 0)
+	{
+		if (!enableBoxFilter ||
+			(worldPoint.x > minPoint.x && worldPoint.y > minPoint.y && worldPoint.z > minPoint.z
+		  && worldPoint.x < maxPoint.x && worldPoint.y < maxPoint.y && worldPoint.z < maxPoint.z))
+		{
+
+			
+			uint numExcludes = 0;
+			uint excludeStride = 0;
+			excludeBuffer.GetDimensions(numExcludes, excludeStride);
+			for (uint i = 0; i < numExcludes; i++)
+			{
+				float3 bmin = excludeBuffer[i].center - excludeBuffer[i].extents;
+				float3 bmax = excludeBuffer[i].center + excludeBuffer[i].extents;
+
+				if ((worldPoint.x > bmin.x && worldPoint.y > bmin.y && worldPoint.z > bmin.z
+				  && worldPoint.x < bmax.x && worldPoint.y < bmax.y && worldPoint.z < bmax.z)) return;
+			}
+
+			filteredBuffer.Append(worldPoint);
+
+			float3 borderMin = mainMinPoint + borderRadius;
+			float3 borderMax = mainMaxPoint - borderRadius;
+			
+			bool isInsideInnerBox = worldPoint.x > borderMin.x && worldPoint.z > borderMin.z
+				&& worldPoint.x < borderMax.x && worldPoint.z < borderMax.z;
+
+			if(!isInsideInnerBox) borderBuffer.Append(worldPoint);
+		}
+	}
 }

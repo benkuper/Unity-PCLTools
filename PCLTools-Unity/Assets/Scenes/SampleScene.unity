@@ -398,7 +398,7 @@ Transform:
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_Children: []
   m_Father: {fileID: 0}
-  m_RootOrder: 4
+  m_RootOrder: 3
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &785471043
 MonoBehaviour:
@@ -412,10 +412,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f40975e7078e1ce4e82c9c573b46b7c8, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  clusterManager: {fileID: 1820267649}
+  clusterManager: {fileID: 1364239460}
   clusterPrefab: {fileID: 5182932385050163289, guid: 907e398faaa237547bda72668dc59fbd,
     type: 3}
---- !u!1 &1820267648
+--- !u!1 &1364239459
 GameObject:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -423,9 +423,9 @@ GameObject:
   m_PrefabAsset: {fileID: 0}
   serializedVersion: 6
   m_Component:
-  - component: {fileID: 1820267651}
-  - component: {fileID: 1820267650}
-  - component: {fileID: 1820267649}
+  - component: {fileID: 1364239462}
+  - component: {fileID: 1364239461}
+  - component: {fileID: 1364239460}
   m_Layer: 0
   m_Name: Kinect
   m_TagString: Untagged
@@ -433,42 +433,51 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &1820267649
+--- !u!114 &1364239460
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1820267648}
+  m_GameObject: {fileID: 1364239459}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 1c6dca565e84c88498d2030249a0e1c8, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
   pclCompute: {fileID: 7200000, guid: 2b5bc2ebf030489439d4ecf04a94c9b1, type: 3}
-  numHDFilteredPoints: 15
-  numLDFilteredPoints: 6
+  numFilteredPoints: 336
   enableBoxFilter: 1
-  boxCenter: {x: 0, y: 1.06, z: 0}
-  boxSize: {x: 3.57, y: 2.05, z: 2.84}
-  HDDownScaleFactor: 22
-  LDDownScaleFactor: 94
+  mainBounds:
+    m_Center: {x: 0.22, y: 0.6, z: 0}
+    m_Extent: {x: 1.18, y: 0.5, z: 0.74}
+  excludeBounds:
+  - m_Center: {x: -0.55, y: 0.85, z: -0.57}
+    m_Extent: {x: 0.19, y: 0.14, z: 0.29}
+  downScaleFactor: 26
+  HDDownScaleFactor: 1
   enableKDTree: 1
   enableCluster: 1
-  numClusters: 0
-  clusterMaxDist: 0.31
-  minClusterSize: 0.023
-  minNeighboursThreshold: 41
+  numClusters: 1
+  clusterMaxDist: 0.15
+  minClusterSize: 0.05
+  minNeighboursThreshold: 20
   maxCorrespondanceDist: 0.1
-  clusterGhostTime: 1
+  clusterGhostTime: 0.2
+  enableOrientation: 1
+  borderRadius: 0.1
+  aimRadius: 0.1
+  hdCenterRadius: 0.2
+  orientationTarget: {x: 0, y: 0.4, z: 0}
+  orientationExcludeRadius: 0
   drawDebug: 3
---- !u!114 &1820267650
+--- !u!114 &1364239461
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1820267648}
+  m_GameObject: {fileID: 1364239459}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: b856306e06deb374186cc0237fe5d08e, type: 3}
@@ -476,17 +485,17 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   enableColor: 1
   enableDepth: 1
---- !u!4 &1820267651
+--- !u!4 &1364239462
 Transform:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1820267648}
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -0.41, y: 0.126, z: -1.506}
+  m_GameObject: {fileID: 1364239459}
+  m_LocalRotation: {x: 0.24086142, y: 0.501678, z: -0.44130963, w: 0.70395374}
+  m_LocalPosition: {x: -0.772, y: 1.779, z: -0.547}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_Children: []
   m_Father: {fileID: 0}
-  m_RootOrder: 3
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_RootOrder: 4
+  m_LocalEulerAnglesHint: {x: 51.435, y: 52.372, z: -37.517002}
