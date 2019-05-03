@@ -2,6 +2,9 @@
 using UnityEngine;
 using BK.Kinect;
 using DataStructures.ViliWonka.KDTree;
+using CielaSpike;
+using System.Threading;
+using System.Collections;
 
 namespace BK.PCL
 {
@@ -80,6 +83,11 @@ namespace BK.PCL
         public event ClusterEvent clusterGhosted;
         public event ClusterEvent clusterRemoved;
 
+        //Threading
+        bool processLock;
+
+        //Debug
+
         public enum DrawDebug { None, Raw, Clusters, Orientations, All };
 
         [Header("Debug")]
@@ -125,13 +133,49 @@ namespace BK.PCL
 
             clusters = new List<Cluster>();
             clusterIdMap = new Dictionary<int, Cluster>();
+
+            
         }
 
         void Update()
         {
-            processPCLCompute();
-            processKDTree();
-            processClusters();
+            if(!processLock)
+            {
+                processPCLCompute();
+                StartCoroutine("processThread");
+            }
+
+            if (drawDebug == DrawDebug.Raw || drawDebug == DrawDebug.All)
+            {
+                Color c = new Color(1, 1, 1, .3f);
+                for (int i = 0; i < numFilteredPoints; i++)
+                {
+                    Vector3 p = filteredPoints[i];
+                    Debug.DrawLine(p, p + Vector3.up * .005f, c);
+                    Debug.DrawLine(p, p + Vector3.right * .005f, c);
+                }
+            }
+        }
+
+
+
+        IEnumerator processThread()
+        {
+            processLock = true;
+
+            Task task;
+
+            Debug.Log("Process KD Tree");
+            this.StartCoroutineAsync(processKDTree(), out task);
+            yield return task.Wait();
+
+            Debug.Log("Process clusters");
+            this.StartCoroutineAsync(processClusters(), out task);
+            yield return task.Wait();
+
+            processLock = false;
+
+            yield return null;
         }
 
 
@@ -164,140 +208,235 @@ namespace BK.PCL
             numFilteredPoints = counter[0];
             filteredBuffer.GetData(filteredPoints);
 
-            if (drawDebug == DrawDebug.Raw || drawDebug == DrawDebug.All)
+           
+        }
+
+
+
+        IEnumerator processKDTree()
+        {
+            if (enableKDTree && enableBoxFilter && numFilteredPoints > 0) tree.Rebuild(numFilteredPoints, 16);
+            yield return null;
+        }
+
+
+        IEnumerator processClusters()
+        {
+            if (!enableKDTree || !enableBoxFilter || !enableCluster)
             {
-                Color c = new Color(1, 1, 1, .3f);
+                yield return null;
+            }
+            else
+            {
+                bool[] processedIndices = new bool[numFilteredPoints];
+                bool[] noiseIndices = new bool[numFilteredPoints];
+                bool[] assignedToCluster = new bool[numFilteredPoints];
+
+                int noiseCount = 0;
+
+                List<Cluster> newClusters = new List<Cluster>();
+
                 for (int i = 0; i < numFilteredPoints; i++)
                 {
-                    Vector3 p = filteredPoints[i];
-                    Debug.DrawLine(p, p + Vector3.up * .005f, c);
-                    Debug.DrawLine(p, p + Vector3.right * .005f, c);
-                }
-            }
-        }
+                    //If we already processed this star, skip it
+                    if (processedIndices[i])
+                        continue;
 
-        void processKDTree()
-        {
-            if (!enableKDTree || !enableBoxFilter) return;
-            if (numFilteredPoints > 0) tree.Rebuild(numFilteredPoints, 16);
-        }
+                    processedIndices[i] = true;
 
+                    //Todo: will the visited.false stuff be carried over?
+                    List<int> neighbourIndices = new List<int>();
 
-        void processClusters()
-        {
-            if (!enableKDTree || !enableBoxFilter || !enableCluster) return;
+                    query.Radius(tree, filteredPoints[i], clusterMaxDist, neighbourIndices);
 
-            bool[] processedIndices = new bool[numFilteredPoints];
-            bool[] noiseIndices = new bool[numFilteredPoints];
-            bool[] assignedToCluster = new bool[numFilteredPoints];
-
-            int noiseCount = 0;
-
-            List<Cluster> newClusters = new List<Cluster>();
-
-            for (int i = 0; i < numFilteredPoints; i++)
-            {
-                //If we already processed this star, skip it
-                if (processedIndices[i])
-                    continue;
-
-                processedIndices[i] = true;
-
-                //Todo: will the visited.false stuff be carried over?
-                List<int> neighbourIndices = new List<int>();
-
-                query.Radius(tree, filteredPoints[i], clusterMaxDist, neighbourIndices);
-
-                //If not enough neighbours, label as noise and continue.
-                if (neighbourIndices.Count < minNeighboursThreshold)
-                {
-                    noiseIndices[i] = true;
-                    noiseCount++;
-                    //assignedToCluster[i] = false;
-                }
-                else
-                {
-                    //Else, start new cluster.
-                    List<int> newClusterIndices = new List<int>();
-
-                    Vector3 clusterCenter = filteredPoints[i];
-                    Vector3 boundsMin = filteredPoints[i];
-                    Vector3 boundsMax = filteredPoints[i];
-
-                    assignedToCluster[i] = true;
-                    newClusterIndices.Add(i);
-
-                    //Expanding the new cluster
-                    var seedSet = neighbourIndices;
-
-                    List<int> propagationNeighbourIndices = new List<int>();
-
-                    while (seedSet.Count > 0)
+                    //If not enough neighbours, label as noise and continue.
+                    if (neighbourIndices.Count < minNeighboursThreshold)
                     {
-                        var currentSeedIndice = seedSet[0];
+                        noiseIndices[i] = true;
+                        noiseCount++;
+                        //assignedToCluster[i] = false;
+                    }
+                    else
+                    {
+                        //Else, start new cluster.
+                        List<int> newClusterIndices = new List<int>();
 
-                        if (!processedIndices[currentSeedIndice])
+                        Vector3 clusterCenter = filteredPoints[i];
+                        Vector3 boundsMin = filteredPoints[i];
+                        Vector3 boundsMax = filteredPoints[i];
+
+                        assignedToCluster[i] = true;
+                        newClusterIndices.Add(i);
+
+                        //Expanding the new cluster
+                        var seedSet = neighbourIndices;
+
+                        List<int> propagationNeighbourIndices = new List<int>();
+
+                        while (seedSet.Count > 0)
                         {
-                            processedIndices[currentSeedIndice] = true;
+                            var currentSeedIndice = seedSet[0];
 
-                            propagationNeighbourIndices.Clear();
-
-                            //if(use2DTree) query2D.Radius(tree2D, filteredXZPoints[currentSeedIndice], clusterMaxDist, propagationNeighbourIndices);
-                            //else
-                            query.Radius(tree, filteredPoints[currentSeedIndice], clusterMaxDist, propagationNeighbourIndices);
-
-                            if (propagationNeighbourIndices.Count >= minNeighboursThreshold)
-                                seedSet.AddRange(propagationNeighbourIndices);
-
-                            if (!assignedToCluster[currentSeedIndice])
+                            if (!processedIndices[currentSeedIndice])
                             {
-                                assignedToCluster[currentSeedIndice] = true;
-                                newClusterIndices.Add(currentSeedIndice);
+                                processedIndices[currentSeedIndice] = true;
 
-                                clusterCenter += filteredPoints[currentSeedIndice];
-                                boundsMin = Vector3.Min(boundsMin, filteredPoints[currentSeedIndice]);
-                                boundsMax = Vector3.Max(boundsMax, filteredPoints[currentSeedIndice]);
+                                propagationNeighbourIndices.Clear();
+
+                                //if(use2DTree) query2D.Radius(tree2D, filteredXZPoints[currentSeedIndice], clusterMaxDist, propagationNeighbourIndices);
+                                //else
+                                query.Radius(tree, filteredPoints[currentSeedIndice], clusterMaxDist, propagationNeighbourIndices);
+
+                                if (propagationNeighbourIndices.Count >= minNeighboursThreshold)
+                                    seedSet.AddRange(propagationNeighbourIndices);
+
+                                if (!assignedToCluster[currentSeedIndice])
+                                {
+                                    assignedToCluster[currentSeedIndice] = true;
+                                    newClusterIndices.Add(currentSeedIndice);
+
+                                    clusterCenter += filteredPoints[currentSeedIndice];
+                                    boundsMin = Vector3.Min(boundsMin, filteredPoints[currentSeedIndice]);
+                                    boundsMax = Vector3.Max(boundsMax, filteredPoints[currentSeedIndice]);
+                                }
                             }
+
+                            //Doing this to avoid infinite loop
+                            seedSet.Remove(currentSeedIndice);
                         }
 
-                        //Doing this to avoid infinite loop
-                        seedSet.Remove(currentSeedIndice);
-                    }
 
+                        if (newClusterIndices.Count > 0) clusterCenter /= newClusterIndices.Count;
+                        Bounds clusterBounds = new Bounds();
+                        clusterBounds.SetMinMax(boundsMin, boundsMax);
 
-                    if(newClusterIndices.Count > 0) clusterCenter /= newClusterIndices.Count;
-                    Bounds clusterBounds = new Bounds();
-                    clusterBounds.SetMinMax(boundsMin, boundsMax);
-
-                    if (clusterBounds.size.x > minClusterSize && clusterBounds.size.y > minClusterSize && clusterBounds.size.z > minClusterSize)
-                    {
-                        Cluster newCluster = new Cluster(newClusterIndices.ToArray(), -1, clusterCenter, clusterBounds);
-                        newClusters.Add(newCluster);
+                        if (clusterBounds.size.x > minClusterSize && clusterBounds.size.y > minClusterSize && clusterBounds.size.z > minClusterSize)
+                        {
+                            Cluster newCluster = new Cluster(newClusterIndices.ToArray(), -1, clusterCenter, clusterBounds);
+                            newClusters.Add(newCluster);
+                        }
                     }
                 }
-            }
 
 
-            if (drawDebug == DrawDebug.Clusters || drawDebug == DrawDebug.All)
-            {
-                foreach (Cluster c in clusters)
+                yield return Ninja.JumpToUnity;
+                if (drawDebug == DrawDebug.Clusters || drawDebug == DrawDebug.All)
                 {
-                    foreach (int index in c.indices)
+                    foreach (Cluster c in clusters)
                     {
-                        Debug.DrawLine(filteredPoints[index], filteredPoints[index] + Vector3.up * .007f, c.color);
-                        Debug.DrawLine(filteredPoints[index], filteredPoints[index] + Vector3.right * .007f, c.color);
+                        foreach (int index in c.indices)
+                        {
+                            Debug.DrawLine(filteredPoints[index], filteredPoints[index] + Vector3.up * .007f, c.color);
+                            Debug.DrawLine(filteredPoints[index], filteredPoints[index] + Vector3.right * .007f, c.color);
+                        }
                     }
                 }
+                yield return Ninja.JumpBack;
+
+
+
+                if (enableOrientation) processClusterOrientations(newClusters);
+
+                yield return Ninja.JumpToUnity;
+                processClusterCorrespondance(newClusters);
+                numClusters = clusters.Count;
+                yield return Ninja.JumpBack;
+            }
+        }
+
+
+        IEnumerator processClusterOrientations(List<Cluster> newClusters)
+        {
+            Bounds innerBounds = new Bounds(mainBounds.center, mainBounds.size - new Vector3(1, 0, 1) * borderRadius); //avoid removing y
+
+            //Replace filteredPoints with HD result from computeShader
+            yield return Ninja.JumpToUnity;
+            pclCompute.SetInt("downScaleFactor", HDDownScaleFactor);
+            pclCompute.SetFloat("borderRadius", borderRadius);
+            yield return Ninja.JumpBack;
+
+
+            foreach (Cluster c in newClusters)
+            {
+                yield return Ninja.JumpToUnity;
+                pclCompute.SetVector("minPoint", c.bounds.min);
+                pclCompute.SetVector("maxPoint", c.bounds.max);
+                pclCompute.SetVector("mainMinPoint", mainBounds.min);
+                pclCompute.SetVector("mainMaxPoint", mainBounds.max);
+
+                pclCompute.SetInt("currentIndex", 0);
+
+                filteredBuffer.SetCounterValue(0);
+                borderBuffer.SetCounterValue(0);
+                countBuffer.SetCounterValue(0);
+
+                pclCompute.Dispatch(filterKernelHandle, threadGroupCount, 1, 1);
+
+                ComputeBuffer.CopyCount(filteredBuffer, countBuffer, 0);
+                countBuffer.GetData(counter);
+                int numClusterPoints = counter[0];
+                filteredBuffer.GetData(filteredPoints);
+
+                ComputeBuffer.CopyCount(borderBuffer, countBuffer, 0);
+                countBuffer.GetData(counter);
+                int numBorderPoints = Mathf.Min(counter[0], borderPoints.Length);
+                borderBuffer.GetData(borderPoints);
+                yield return Ninja.JumpBack;
+
+
+                Vector3 clusterP1 = new Vector3();
+                for (int i = 0; i < numBorderPoints; i++)
+                {
+                    clusterP1 += borderPoints[i];
+                    if (drawDebug == DrawDebug.Orientations || drawDebug == DrawDebug.All) Debug.DrawLine(borderPoints[i] + Vector3.left * .0001f, borderPoints[i] + Vector3.left * .005f, Color.red);
+                }
+
+                if (numBorderPoints > 0) clusterP1 /= numBorderPoints;
+                Vector3 p2Aim = clusterP1 + (c.center - clusterP1) * 2.2f;
+
+                Vector3 clusterP2 = new Vector3();
+                int numInP2Radius = 0;
+
+                Vector3 hdCenter = new Vector3();
+                int numInCenterRadius = 0;
+                for (int i = 0; i < numClusterPoints; i++)
+                {
+                    if (Vector3.Distance(c.center, filteredPoints[i]) < hdCenterRadius)
+                    {
+                        hdCenter += filteredPoints[i];
+                        numInCenterRadius++;
+                    }
+
+                    if (Vector3.Distance(p2Aim, filteredPoints[i]) < aimRadius)
+                    {
+                        clusterP2 += filteredPoints[i];
+                        numInP2Radius++;
+
+                       // if (drawDebug == DrawDebug.Orientations || drawDebug == DrawDebug.All) Debug.DrawLine(filteredPoints[i] + Vector3.right * .0001f, filteredPoints[i] + Vector3.right * .005f, Color.blue);
+                    }
+                }
+
+                if (numInCenterRadius > 0) hdCenter /= numInCenterRadius;
+                else hdCenter = c.center;
+
+                if (numInP2Radius > 0) clusterP2 /= numInP2Radius;
+                else clusterP2 = p2Aim;
+
+                c.center = hdCenter;
+
+                c.ray = new Ray(c.center, (clusterP2 - c.center).normalized);
+
+                yield return Ninja.JumpToUnity;
+                if (drawDebug == DrawDebug.Orientations || drawDebug == DrawDebug.All)
+                {
+                    for (int i = 0; i < numClusterPoints; i++) Debug.DrawLine(filteredPoints[i], filteredPoints[i] + Vector3.down * .001f, c.color);
+                    Debug.DrawRay(c.ray.origin, c.ray.direction, Color.grey);
+
+                }
+                yield return Ninja.JumpBack;
             }
 
-
-
-            if (enableOrientation) processClusterOrientations(newClusters);
-            processClusterCorrespondance(newClusters);
-
-            numClusters = clusters.Count;
-
-            
+            yield return null;
         }
 
 
@@ -380,89 +519,7 @@ namespace BK.PCL
         }
 
 
-        void processClusterOrientations(List<Cluster> newClusters)
-        {
-            Bounds innerBounds = new Bounds(mainBounds.center, mainBounds.size - new Vector3(1,0,1) * borderRadius); //avoid removing y
-
-            //Replace filteredPoints with HD result from computeShader
-            pclCompute.SetInt("downScaleFactor", HDDownScaleFactor);
-            pclCompute.SetFloat("borderRadius", borderRadius);
-
-            foreach(Cluster c in newClusters)
-            {
-                pclCompute.SetVector("minPoint", c.bounds.min);
-                pclCompute.SetVector("maxPoint", c.bounds.max);
-                pclCompute.SetVector("mainMinPoint",  mainBounds.min);
-                pclCompute.SetVector("mainMaxPoint", mainBounds.max);
-                    
-                pclCompute.SetInt("currentIndex", 0);
-
-                filteredBuffer.SetCounterValue(0);
-                borderBuffer.SetCounterValue(0);
-                countBuffer.SetCounterValue(0);
-
-                pclCompute.Dispatch(filterKernelHandle, threadGroupCount, 1, 1);
-
-                ComputeBuffer.CopyCount(filteredBuffer, countBuffer, 0);
-                countBuffer.GetData(counter);
-                int numClusterPoints = counter[0];
-                filteredBuffer.GetData(filteredPoints);
-
-                ComputeBuffer.CopyCount(borderBuffer, countBuffer, 0);
-                countBuffer.GetData(counter);
-                int numBorderPoints = Mathf.Min(counter[0], borderPoints.Length);
-                borderBuffer.GetData(borderPoints);
-
-                Vector3 clusterP1 = new Vector3();
-                for (int i = 0; i < numBorderPoints; i++)
-                {
-                    clusterP1 += borderPoints[i];
-                    if (drawDebug == DrawDebug.Orientations || drawDebug == DrawDebug.All) Debug.DrawLine(borderPoints[i] + Vector3.left * .0001f, borderPoints[i] + Vector3.left * .005f, Color.red);
-                }
-
-                if (numBorderPoints > 0) clusterP1 /= numBorderPoints;
-                Vector3 p2Aim = clusterP1 + (c.center - clusterP1) * 2.2f;
-
-                Vector3 clusterP2 = new Vector3();
-                int numInP2Radius = 0;
-
-                Vector3 hdCenter = new Vector3();
-                int numInCenterRadius = 0;
-                for (int i = 0; i < numClusterPoints; i++)
-                {
-                    if (Vector3.Distance(c.center, filteredPoints[i]) < hdCenterRadius)
-                    {
-                        hdCenter += filteredPoints[i];
-                        numInCenterRadius++;
-                    }
-
-                    if(Vector3.Distance(p2Aim, filteredPoints[i]) < aimRadius)
-                    {
-                        clusterP2 += filteredPoints[i];
-                        numInP2Radius++;
-
-                        if (drawDebug == DrawDebug.Orientations || drawDebug == DrawDebug.All) Debug.DrawLine(filteredPoints[i] + Vector3.right * .0001f, filteredPoints[i] + Vector3.right * .005f, Color.blue);
-                    }
-                }
-
-                if (numInCenterRadius > 0) hdCenter /= numInCenterRadius;
-                else hdCenter = c.center;
-
-                if (numInP2Radius > 0) clusterP2 /= numInP2Radius;
-                else clusterP2 = p2Aim;
-
-                c.center = hdCenter;
-
-                c.ray = new Ray(c.center, (clusterP2 - c.center).normalized);
-
-                if (drawDebug == DrawDebug.Orientations || drawDebug == DrawDebug.All)
-                {
-                    for (int i = 0; i < numClusterPoints; i++)  Debug.DrawLine(filteredPoints[i], filteredPoints[i] + Vector3.down * .001f, c.color);
-                    Debug.DrawRay(c.ray.origin, c.ray.direction,Color.grey);
-
-                }
-            }
-        }
+       
 
 
         private void OnApplicationQuit()
@@ -475,14 +532,14 @@ namespace BK.PCL
 
         void OnDrawGizmosSelected()
         {
-            Gizmos.color = Color.yellow;
-            Gizmos.DrawWireCube(mainBounds.center, mainBounds.size);
+            //Gizmos.color = Color.yellow;
+           // Gizmos.DrawWireCube(mainBounds.center, mainBounds.size);
 
-            Gizmos.color = Color.red;
-            for (int i = 0; i < excludeBounds.Count; i++)
-            {
-                Gizmos.DrawWireCube(excludeBounds[i].center, excludeBounds[i].size);
-            }
+            //Gizmos.color = Color.red;
+           // for (int i = 0; i < excludeBounds.Count; i++)
+           // {
+           //     Gizmos.DrawWireCube(excludeBounds[i].center, excludeBounds[i].size);
+           // }
 
             if (Application.isPlaying)
             {
@@ -501,6 +558,13 @@ namespace BK.PCL
             Gizmos.color = new Color(1, 0, 1);
             Gizmos.DrawWireCube(orientationTarget, Vector3.one * .05f);
         }
-    }
 
+        public void RotatePointAroundPivot(Vector3 point, Vector3 pivot, Quaternion rot)
+        {
+            transform.localPosition = rot * (point - pivot) + pivot;
+            transform.localRotation *= rot;
+        }
+
+    }
+    
 }

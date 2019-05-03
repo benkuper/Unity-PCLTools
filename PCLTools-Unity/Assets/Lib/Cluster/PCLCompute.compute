@@ -34,7 +34,7 @@ void TransformAndFilter(uint id : SV_DispatchThreadID)
 
 	if (worldPoint.x == 0 && worldPoint.y == 0 && worldPoint.z == 0) return; 
 
-	worldPoint.x = -worldPoint.x; //invert X for kinect
+	//worldPoint.x = -worldPoint.x; //invert X for kinect
 	
 	if (downScaleFactor <= 1 || id % downScaleFactor == 0)
 	{
