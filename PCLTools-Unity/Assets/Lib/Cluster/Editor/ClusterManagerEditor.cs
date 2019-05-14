@@ -8,6 +8,7 @@ using UnityEditor.IMGUI.Controls;
 [CustomEditor(typeof(ClusterManager)), CanEditMultipleObjects]
 public class ClusterManagerEditor : Editor
 {
+    /*
     private BoxBoundsHandle boundsHandle = new BoxBoundsHandle();
 
     protected virtual void OnSceneGUI()
@@ -53,4 +54,5 @@ public class ClusterManagerEditor : Editor
             cm.transform.parent.localRotation = r;
         //}
     }
+    */
 }

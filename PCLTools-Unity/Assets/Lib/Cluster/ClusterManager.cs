@@ -165,11 +165,11 @@ namespace BK.PCL
 
             Task task;
 
-            Debug.Log("Process KD Tree");
+            //Debug.Log("Process KD Tree");
             this.StartCoroutineAsync(processKDTree(), out task);
             yield return task.Wait();
 
-            Debug.Log("Process clusters");
+            //Debug.Log("Process clusters");
             this.StartCoroutineAsync(processClusters(), out task);
             yield return task.Wait();
 
