@@ -155,8 +155,29 @@ namespace BK.PCL
                     Debug.DrawLine(p, p + Vector3.right * .005f, c);
                 }
             }
-        }
 
+            if (drawDebug == DrawDebug.Clusters || drawDebug == DrawDebug.All)
+            {
+                foreach (Cluster c in clusters)
+                {
+                    foreach (Vector3 p in c.points)
+                    {
+                        Debug.DrawLine(p, p + Vector3.up * .007f, c.color);
+                        Debug.DrawLine(p, p + Vector3.right * .007f, c.color);
+                    }
+                }
+            }
+
+            if (drawDebug == DrawDebug.Orientations || drawDebug == DrawDebug.All)
+            {
+                foreach (Cluster c in clusters)
+                {
+                    foreach (Vector3 p in c.border1Points) Debug.DrawLine(p + Vector3.left * .0001f, p + Vector3.left * .005f, Color.red);
+                    foreach (Vector3 p in c.border2Points) Debug.DrawLine(p + Vector3.left * .0001f, p + Vector3.left * .005f, Color.blue);
+                    Debug.DrawRay(c.ray.origin, c.ray.direction, c.color);
+                }
+            }
+        }
 
 
         IEnumerator processThread()
@@ -260,6 +281,7 @@ namespace BK.PCL
                     {
                         //Else, start new cluster.
                         List<int> newClusterIndices = new List<int>();
+                        List<Vector3> newClusterPoints = new List<Vector3>();
 
                         Vector3 clusterCenter = filteredPoints[i];
                         Vector3 boundsMin = filteredPoints[i];
@@ -267,6 +289,7 @@ namespace BK.PCL
 
                         assignedToCluster[i] = true;
                         newClusterIndices.Add(i);
+                        newClusterPoints.Add(filteredPoints[i]);
 
                         //Expanding the new cluster
                         var seedSet = neighbourIndices;
@@ -294,6 +317,7 @@ namespace BK.PCL
                                 {
                                     assignedToCluster[currentSeedIndice] = true;
                                     newClusterIndices.Add(currentSeedIndice);
+                                    newClusterPoints.Add(filteredPoints[currentSeedIndice]);
 
                                     clusterCenter += filteredPoints[currentSeedIndice];
                                     boundsMin = Vector3.Min(boundsMin, filteredPoints[currentSeedIndice]);
@@ -312,7 +336,7 @@ namespace BK.PCL
 
                         if (clusterBounds.size.x > minClusterSize && clusterBounds.size.y > minClusterSize && clusterBounds.size.z > minClusterSize)
                         {
-                            Cluster newCluster = new Cluster(newClusterIndices.ToArray(), -1, clusterCenter, clusterBounds);
+                            Cluster newCluster = new Cluster(newClusterPoints.ToArray(), -1, clusterCenter, clusterBounds);
                             newClusters.Add(newCluster);
                         }
                     }
@@ -320,24 +344,9 @@ namespace BK.PCL
 
 
                 yield return Ninja.JumpToUnity;
-                if (drawDebug == DrawDebug.Clusters || drawDebug == DrawDebug.All)
-                {
-                    foreach (Cluster c in clusters)
-                    {
-                        foreach (int index in c.indices)
-                        {
-                            Debug.DrawLine(filteredPoints[index], filteredPoints[index] + Vector3.up * .007f, c.color);
-                            Debug.DrawLine(filteredPoints[index], filteredPoints[index] + Vector3.right * .007f, c.color);
-                        }
-                    }
-                }
-                yield return Ninja.JumpBack;
-
-
-
                 if (enableOrientation) processClusterOrientations(newClusters);
 
-                yield return Ninja.JumpToUnity;
+               
                 processClusterCorrespondance(newClusters);
                 numClusters = clusters.Count;
                 yield return Ninja.JumpBack;
@@ -345,20 +354,19 @@ namespace BK.PCL
         }
 
 
-        IEnumerator processClusterOrientations(List<Cluster> newClusters)
+        void processClusterOrientations(List<Cluster> newClusters)
         {
             Bounds innerBounds = new Bounds(mainBounds.center, mainBounds.size - new Vector3(1, 0, 1) * borderRadius); //avoid removing y
 
             //Replace filteredPoints with HD result from computeShader
-            yield return Ninja.JumpToUnity;
+           // yield return Ninja.JumpToUnity;
             pclCompute.SetInt("downScaleFactor", HDDownScaleFactor);
             pclCompute.SetFloat("borderRadius", borderRadius);
-            yield return Ninja.JumpBack;
-
+           // yield return Ninja.JumpBack;
 
             foreach (Cluster c in newClusters)
             {
-                yield return Ninja.JumpToUnity;
+               // yield return Ninja.JumpToUnity;
                 pclCompute.SetVector("minPoint", c.bounds.min);
                 pclCompute.SetVector("maxPoint", c.bounds.max);
                 pclCompute.SetVector("mainMinPoint", mainBounds.min);
@@ -381,14 +389,17 @@ namespace BK.PCL
                 countBuffer.GetData(counter);
                 int numBorderPoints = Mathf.Min(counter[0], borderPoints.Length);
                 borderBuffer.GetData(borderPoints);
-                yield return Ninja.JumpBack;
+                //yield return Ninja.JumpBack;
 
 
                 Vector3 clusterP1 = new Vector3();
+                c.border1Points = new Vector3[numBorderPoints];
+
                 for (int i = 0; i < numBorderPoints; i++)
                 {
                     clusterP1 += borderPoints[i];
-                    if (drawDebug == DrawDebug.Orientations || drawDebug == DrawDebug.All) Debug.DrawLine(borderPoints[i] + Vector3.left * .0001f, borderPoints[i] + Vector3.left * .005f, Color.red);
+                    c.border1Points[i] = borderPoints[i];
+                    //if (drawDebug == DrawDebug.Orientations || drawDebug == DrawDebug.All) Debug.DrawLine(borderPoints[i] + Vector3.left * .0001f, borderPoints[i] + Vector3.left * .005f, Color.red);
                 }
 
                 if (numBorderPoints > 0) clusterP1 /= numBorderPoints;
@@ -399,6 +410,9 @@ namespace BK.PCL
 
                 Vector3 hdCenter = new Vector3();
                 int numInCenterRadius = 0;
+
+                List<Vector3> border2Points = new List<Vector3>();
+
                 for (int i = 0; i < numClusterPoints; i++)
                 {
                     if (Vector3.Distance(c.center, filteredPoints[i]) < hdCenterRadius)
@@ -411,10 +425,13 @@ namespace BK.PCL
                     {
                         clusterP2 += filteredPoints[i];
                         numInP2Radius++;
-
+                        border2Points.Add(filteredPoints[i]);
                        // if (drawDebug == DrawDebug.Orientations || drawDebug == DrawDebug.All) Debug.DrawLine(filteredPoints[i] + Vector3.right * .0001f, filteredPoints[i] + Vector3.right * .005f, Color.blue);
                     }
                 }
+
+                c.border2Points = border2Points.ToArray();
+
 
                 if (numInCenterRadius > 0) hdCenter /= numInCenterRadius;
                 else hdCenter = c.center;
@@ -425,18 +442,9 @@ namespace BK.PCL
                 c.center = hdCenter;
 
                 c.ray = new Ray(c.center, (clusterP2 - c.center).normalized);
-
-                yield return Ninja.JumpToUnity;
-                if (drawDebug == DrawDebug.Orientations || drawDebug == DrawDebug.All)
-                {
-                    for (int i = 0; i < numClusterPoints; i++) Debug.DrawLine(filteredPoints[i], filteredPoints[i] + Vector3.down * .001f, c.color);
-                    Debug.DrawRay(c.ray.origin, c.ray.direction, Color.grey);
-
-                }
-                yield return Ninja.JumpBack;
             }
 
-            yield return null;
+           // yield return null;
         }
 
 

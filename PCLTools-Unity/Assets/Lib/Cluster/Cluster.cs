@@ -6,7 +6,9 @@ namespace BK.PCL
     {
         public static int idCounter = 0;
 
-        public int[] indices;
+        public Vector3[] points;
+        public Vector3[] border1Points;
+        public Vector3[] border2Points;
         public int id;
         public int numPoints;
         public Vector3 center;
@@ -16,15 +18,18 @@ namespace BK.PCL
 
         public float timeAtGhosted;
 
-        public Cluster(int[] indices, int clusterID, Vector3 center, Bounds bounds)
+        public Cluster(Vector3[] points, int clusterID, Vector3 center, Bounds bounds)
         {
             this.id = clusterID;
-            this.indices = indices;
-            numPoints = indices.Length;
+            this.points = points;
+            numPoints = points.Length;
             this.center = center;
             this.bounds = bounds;
             this.timeAtGhosted = -1;
+            border1Points = new Vector3[0];
+            border2Points = new Vector3[0];
         }
+
 
         public bool isGhost()
         {
